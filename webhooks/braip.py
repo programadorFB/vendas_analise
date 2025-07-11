@@ -24,7 +24,28 @@ def receber():
             abort(403, description="Assinatura inválida")
 
     try:
-        salvar_evento("braip", payload.get('event_type', 'unknown'), payload)
+        # Mapear dados da Braip para formato padrão
+        dados_padronizados = {
+            'webhook_id': payload.get('webhook_id'),
+            'customer_email': payload.get('customer_email'),
+            'customer_name': payload.get('customer_name'),
+            'customer_document': payload.get('customer_document'),
+            'product_name': payload.get('product_name'),
+            'product_id': payload.get('product_id'),
+            'transaction_id': payload.get('transaction_id'),
+            'amount': payload.get('amount'),
+            'currency': payload.get('currency', 'BRL'),
+            'payment_method': payload.get('payment_method'),
+            'status': payload.get('status'),
+            'commission_amount': payload.get('commission_amount'),
+            'affiliate_email': payload.get('affiliate_email'),
+            'utm_source': payload.get('utm_source'),
+            'utm_medium': payload.get('utm_medium'),
+            'sales_link': payload.get('sales_link'),
+            **payload  # Adiciona todos os campos originais
+        }
+        
+        salvar_evento("braip", payload.get('event_type', 'unknown'), dados_padronizados)
         return {"status": "ok"}
     except Exception as e:
         return {"status": "error", "message": str(e)}, 500
