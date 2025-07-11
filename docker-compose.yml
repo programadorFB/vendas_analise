@@ -1,8 +1,5 @@
-# docker-compose.yml
-version: '3.8'
 
 services:
-  # Aplicação Flask
   app:
     build: .
     ports:
@@ -19,7 +16,10 @@ services:
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
+    command: gunicorn --bind 0.0.0.0:5000 wsgi:app
 
+
+  
   # Banco de dados PostgreSQL
   db:
     image: postgres:15

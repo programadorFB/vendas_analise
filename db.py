@@ -3,6 +3,10 @@ import json
 import psycopg2
 from psycopg2 import sql
 from dotenv import load_dotenv
+from io import StringIO, BytesIO
+import csv
+import pandas as pd
+from datetime import datetime
 
 load_dotenv()
 
@@ -91,9 +95,6 @@ def exportar_csv(plataforma=None, start_date=None, end_date=None):
     """
     Exporta dados do banco para CSV
     """
-    import csv
-    from io import StringIO
-    
     query = """
     SELECT 
         platform, event_type, webhook_id, customer_email, customer_name,
@@ -118,6 +119,7 @@ def exportar_csv(plataforma=None, start_date=None, end_date=None):
     
     query += " ORDER BY created_at DESC"
     
+    conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
@@ -137,6 +139,136 @@ def exportar_csv(plataforma=None, start_date=None, end_date=None):
             
     except Exception as e:
         print(f"Erro ao exportar CSV: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
+
+def exportar_xlsx(plataforma=None, start_date=None, end_date=None):
+    """
+    Exporta dados do banco para arquivo Excel (XLSX), focando nos dados do raw_data (JSON)
+    Retorna um objeto BytesIO com o arquivo Excel em memória
+    """
+    query = """
+    SELECT 
+        id, platform, event_type, created_at,  -- colunas de controle
+        raw_data  -- dados principais em JSON
+    FROM webhooks
+    WHERE 1=1
+    """
+    
+    params = []
+    if plataforma:
+        query += " AND platform = %s"
+        params.append(plataforma)
+    if start_date:
+        query += " AND created_at >= %s"
+        params.append(start_date)
+    if end_date:
+        query += " AND created_at <= %s"
+        params.append(end_date)
+    
+    query += " ORDER BY created_at DESC"
+    
+    conn = None
+    try:
+        conn = get_db_connection()
+        
+        # Obter os dados do banco
+        with conn.cursor() as cursor:
+            cursor.execute(query, params if params else None)
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+        
+        # Converter para DataFrame
+        df = pd.DataFrame(rows, columns=columns)
+        
+        # Processar o raw_data (JSON) para colunas separadas
+        if 'raw_data' in df.columns:
+            # Converter JSON string para dict
+            df['raw_data'] = df['raw_data'].apply(lambda x: json.loads(x) if x else {})
+            
+            # Normalizar o JSON em colunas separadas
+            raw_data_df = pd.json_normalize(df['raw_data'])
+            
+            # Combinar com as colunas de controle
+            final_df = pd.concat([df.drop('raw_data', axis=1), raw_data_df], axis=1)
+        else:
+            final_df = df
+        
+        # Criar um arquivo Excel em memória
+        output = BytesIO()
+        
+        # Criar um Excel writer usando pandas
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            final_df.to_excel(writer, sheet_name='Dados', index=False)
+            
+            # Acessar a workbook e worksheet para formatação
+            workbook = writer.book
+            worksheet = writer.sheets['Dados']
+            
+            # Formatar cabeçalho
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'top',
+                'fg_color': '#4472C4',
+                'font_color': 'white',
+                'border': 1
+            })
+            
+            # Formatar células de dados
+            data_format = workbook.add_format({
+                'text_wrap': True,
+                'valign': 'top',
+                'border': 1
+            })
+            
+            # Formatar células de valores monetários
+            money_format = workbook.add_format({
+                'num_format': 'R$ #,##0.00',
+                'border': 1
+            })
+            
+            # Aplicar formatos
+            for col_num, value in enumerate(final_df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Identificar colunas numéricas automaticamente
+            numeric_cols = final_df.select_dtypes(include=['int64', 'float64']).columns
+            for col in numeric_cols:
+                if any(keyword in col.lower() for keyword in ['amount', 'value', 'total', 'price']):
+                    col_idx = final_df.columns.get_loc(col)
+                    worksheet.set_column(col_idx, col_idx, 15, money_format)
+            
+            # Auto-ajustar largura das colunas
+            for i, col in enumerate(final_df.columns):
+                # Converter todos os valores para string para calcular o comprimento máximo
+                max_len = max(
+                    final_df[col].astype(str).map(len).max(),  # maior valor na coluna
+                    len(str(col))  # tamanho do cabeçalho
+                ) + 2  # pequeno padding
+                worksheet.set_column(i, i, max_len, data_format)
+            
+            # Adicionar filtros
+            worksheet.autofilter(0, 0, len(final_df), len(final_df.columns) - 1)
+            
+            # Congelar painel superior (mantendo colunas de controle visíveis)
+            worksheet.freeze_panes(1, 4)  # Congela após a 4ª coluna (created_at)
+            
+            # Adicionar título e metadados
+            workbook.set_properties({
+                'title': f'Relatório de Webhooks - {datetime.now().strftime("%Y-%m-%d")}',
+                'subject': 'Dados de transações',
+                'author': 'Sistema de Webhooks',
+                'company': 'Sua Empresa'
+            })
+        
+        output.seek(0)
+        return output
+        
+    except Exception as e:
+        print(f"Erro ao exportar XLSX: {e}")
         raise
     finally:
         if conn:
