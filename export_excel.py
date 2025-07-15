@@ -98,7 +98,16 @@ def create_excel_report(data, columns, include_raw_data=False):
         if include_raw_data and 'raw_data' in df.columns:
             df['raw_data'] = df['raw_data'].apply(lambda x: json.loads(x) if x else {})
             raw_data_df = pd.json_normalize(df['raw_data'])
+
+            # Filtra colunas que já existem para evitar duplicidade
+            columns_to_add = [col for col in raw_data_df.columns if col not in df.columns]
+
+            # Seleciona apenas as colunas novas
+            raw_data_df = raw_data_df[columns_to_add]
+
+            # Concatena com o df original (sem raw_data)
             df = pd.concat([df.drop('raw_data', axis=1), raw_data_df], axis=1)
+
         
         output = BytesIO()
         
