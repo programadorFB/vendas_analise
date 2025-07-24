@@ -32,3 +32,6 @@ out/
 # Misc
 coverage/
 *.tgz
+
+
+mycreds.txt
