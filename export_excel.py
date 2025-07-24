@@ -247,59 +247,35 @@ def fetch_webhook_data(start_date=None, end_date=None, platform=None, include_ra
 def create_excel_report(data, columns, include_raw_data=False):
     try:
         df = pd.DataFrame(data, columns=columns)
-        
+
         # Remove timezone de created_at para evitar erro no Excel
         if 'created_at' in df.columns:
             df['created_at'] = pd.to_datetime(df['created_at']).dt.tz_localize(None)
-        
+
         # Processar raw_data se incluído
         if include_raw_data and 'raw_data' in df.columns:
             df['raw_data'] = df['raw_data'].apply(lambda x: json.loads(x) if x else {})
             raw_data_df = pd.json_normalize(df['raw_data'])
 
-            # Filtra colunas que já existem para evitar duplicidade
             columns_to_add = [col for col in raw_data_df.columns if col not in df.columns]
-
-            # Seleciona apenas as colunas novas
             raw_data_df = raw_data_df[columns_to_add]
-
-            # Concatena com o df original (sem raw_data)
             df = pd.concat([df.drop('raw_data', axis=1), raw_data_df], axis=1)
 
-        
         output = BytesIO()
-        
+
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            # Sheet 1: Raw Data
-            df.to_excel(writer, sheet_name='Raw Data', index=False)
-            
-            # Sheet 2: Platform Summary
-            if not df.empty:
-                platform_summary = create_platform_summary(df)
-                platform_summary.to_excel(writer, sheet_name='Platform Summary', index=False)
-            
-            # Sheet 3: Daily Sales
-            if not df.empty and 'created_at' in df.columns:
-                daily_sales = create_daily_sales(df)
-                daily_sales.to_excel(writer, sheet_name='Daily Sales', index=False)
-            
-            # Sheet 4: Top Products
-            if not df.empty and 'product_name' in df.columns:
-                top_products = create_top_products(df)
-                top_products.to_excel(writer, sheet_name='Top Products', index=False)
-            
-            # Sheet 5: Affiliate Performance
-            if not df.empty and 'affiliate_email' in df.columns:
-                affiliate_perf = create_affiliate_performance(df)
-                if affiliate_perf is not None:
-                    affiliate_perf.to_excel(writer, sheet_name='Affiliate Performance', index=False)
-            
-            # Formatação do Excel
-            format_excel(writer, df)
-        
+            if 'platform' in df.columns:
+                for platform_name, platform_df in df.groupby('platform'):
+                    sheet_name = platform_name[:31] or 'Plataforma'  # Excel limita a 31 caracteres
+                    platform_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    format_excel(writer, platform_df, sheet_name)
+            else:
+                df.to_excel(writer, sheet_name='Webhooks', index=False)
+                format_excel(writer, df, 'Webhooks')
+
         output.seek(0)
         return output
-        
+
     except Exception as e:
         logger.error(f"Erro ao criar relatório Excel: {e}")
         raise
@@ -354,10 +330,11 @@ def create_affiliate_performance(df):
     affiliate_performance.columns = ['Sales_Count', 'Total_Sales', 'Total_Commission']
     return affiliate_performance.sort_values('Total_Commission', ascending=False).reset_index()
 
-def format_excel(writer, df):
-    """Aplica formatação profissional ao Excel"""
+def format_excel(writer, df, sheet_name):
+    """Aplica formatação profissional ao Excel por sheet"""
     workbook = writer.book
-    
+    worksheet = writer.sheets[sheet_name]
+
     # Formatações
     header_format = workbook.add_format({
         'bold': True,
@@ -367,41 +344,38 @@ def format_excel(writer, df):
         'font_color': 'white',
         'border': 1
     })
-    
+
     money_format = workbook.add_format({
         'num_format': 'R$ #,##0.00',
         'border': 1
     })
-    
+
     date_format = workbook.add_format({
         'num_format': 'dd/mm/yyyy',
         'border': 1
     })
-    
-    # Aplicar formatação a cada planilha
-    for sheet_name in writer.sheets:
-        worksheet = writer.sheets[sheet_name]
-        
-        # Formatar cabeçalho
-        for col_num, value in enumerate(df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-        
-        # Auto-ajustar colunas
-        for i, col in enumerate(df.columns):
-            max_len = max(
-                df[col].astype(str).map(len).max(),
-                len(str(col))
-            ) + 2
-            worksheet.set_column(i, i, max_len)
-        
-        # Formatar colunas especiais
-        if 'amount' in df.columns:
-            col_idx = df.columns.get_loc('amount')
-            worksheet.set_column(col_idx, col_idx, 15, money_format)
-        
-        if 'created_at' in df.columns:
-            col_idx = df.columns.get_loc('created_at')
-            worksheet.set_column(col_idx, col_idx, 15, date_format)
+
+    # Formatar cabeçalho
+    for col_num, value in enumerate(df.columns.values):
+        worksheet.write(0, col_num, value, header_format)
+
+    # Auto-ajustar colunas
+    for i, col in enumerate(df.columns):
+        max_len = max(
+            df[col].astype(str).map(len).max(),
+            len(str(col))
+        ) + 2
+        worksheet.set_column(i, i, max_len)
+
+    # Formatar colunas especiais
+    if 'amount' in df.columns:
+        col_idx = df.columns.get_loc('amount')
+        worksheet.set_column(col_idx, col_idx, 15, money_format)
+
+    if 'created_at' in df.columns:
+        col_idx = df.columns.get_loc('created_at')
+        worksheet.set_column(col_idx, col_idx, 15, date_format)
+
 
 @export_bp.route('/excel', methods=['GET'])
 def export_to_excel():
