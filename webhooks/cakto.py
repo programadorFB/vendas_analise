@@ -47,10 +47,26 @@ def extract_cakto_data(payload):
     commissions = data.get("commissions", [])
     first_commission = commissions[0] if commissions else {}
     
-    # Calcula valores
-    base_amount = data.get("baseAmount", 0)
-    discount = data.get("discount", 0)
-    final_amount = data.get("amount", base_amount - discount if base_amount else None)
+    # Helper function to safely convert to float
+    def safe_float(value, default=0):
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+    
+    # Calcula valores com conversão segura para float
+    base_amount = safe_float(data.get("baseAmount"))
+    discount = safe_float(data.get("discount"))
+    
+    # Calcula final_amount de forma segura
+    if data.get("amount") is not None:
+        final_amount = safe_float(data.get("amount"))
+    elif base_amount > 0:
+        final_amount = base_amount - discount
+    else:
+        final_amount = None
     
     return {
         # Campos padrão do banco
@@ -71,7 +87,7 @@ def extract_cakto_data(payload):
         "ref_id": data.get("refId"),
         "parent_order": data.get("parent_order"),
         
-        "amount": final_amount or data.get("total"),
+        "amount": final_amount or safe_float(data.get("total")),
         "base_amount": base_amount,
         "discount": discount,
         "currency": data.get("currency", "BRL"),
@@ -82,15 +98,15 @@ def extract_cakto_data(payload):
         "status": data.get("status"),
         
         # Comissões e afiliados
-        "commission_amount": first_commission.get("totalAmount") or data.get("commission_amount") or data.get("commission"),
+        "commission_amount": safe_float(first_commission.get("totalAmount")) or safe_float(data.get("commission_amount")) or safe_float(data.get("commission")),
         "commission_type": first_commission.get("type"),
-        "commission_percentage": first_commission.get("percentage"),
+        "commission_percentage": safe_float(first_commission.get("percentage")),
         "affiliate_email": data.get("affiliate") or first_commission.get("user") or data.get("affiliate_email"),
         
         # Oferta
         "offer_id": offer.get("id"),
         "offer_name": offer.get("name"),
-        "offer_price": offer.get("price"),
+        "offer_price": safe_float(offer.get("price")),
         "offer_type": data.get("offer_type"),
         
         # URLs e links
@@ -135,7 +151,7 @@ def extract_cakto_data(payload):
         "pedido_id": data.get("id"),
         "cliente_nome": customer.get("name") or data.get("customer_name"),
         "produto": product.get("name") or data.get("product_name"),
-        "valor": final_amount or data.get("total") or data.get("amount"),
+        "valor": final_amount or safe_float(data.get("total")) or safe_float(data.get("amount")),
         "data": data.get("createdAt") or data.get("created_at"),
         
         # Informações de comissões completas (serializado)
