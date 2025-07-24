@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import all webhook handlers and utilities
+from drive_upload import upload_or_replace_file
 from webhooks.kirvano import kirvano_bp
 from webhooks.hubla import hubla_bp
 from webhooks.braip import braip_bp
@@ -332,9 +333,6 @@ def dashboard():
 
 @app.route("/export/quick-excel")
 def quick_excel_export():
-    """
-    Quick Excel export endpoint for immediate download
-    """
     try:
         platform = request.args.get('platform')
         days = request.args.get('days', 30, type=int)
@@ -353,6 +351,15 @@ def quick_excel_export():
         platform_suffix = f"_{platform}" if platform else "_all_platforms"
         filename = f"webhooks_report{platform_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         
+        # Save to temporary file for upload
+        temp_path = f"/tmp/{filename}"
+        with open(temp_path, 'wb') as f:
+            f.write(excel_file.getvalue())
+        
+        # Upload to Google Drive
+        upload_or_replace_file(temp_path)
+        
+        # Return the file for download
         return send_file(
             excel_file,
             as_attachment=True,
@@ -362,7 +369,7 @@ def quick_excel_export():
     except Exception as e:
         logger.error(f"Quick Excel export failed: {e}")
         return {"error": str(e)}, 500
-
+    
 @app.errorhandler(404)
 def not_found(error):
     return {
