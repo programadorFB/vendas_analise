@@ -1,71 +1,102 @@
-from flask import Blueprint, request, abort, jsonify
-from db import salvar_evento
+# webhooks/braip.py - Missing Braip webhook handler
+import json
 import hmac
 import hashlib
 import os
-import requests
-import json
-from datetime import datetime, timedelta
+from flask import Blueprint, request, jsonify
+from db import salvar_evento
 
 braip_bp = Blueprint('braip', __name__)
 
-# Token da API Braip
-BRAIP_API_TOKEN = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6ImUxMzlhOTAyOGNjZDc3Y2ExZDNhNTdkNjViZGI3Y2YzMDc2YWMzOWRhOWI2Y2RjMjliMTcxNjdmYzNlZGM2MTdhZWMwYzZlYzg5YzA5Mzk2In0.eyJhdWQiOiI0Nzc1MyIsImp0aSI6ImUxMzlhOTAyOGNjZDc3Y2ExZDNhNTdkNjViZGI3Y2YzMDc2YWMzOWRhOWI2Y2RjMjliMTcxNjdmYzNlZGM2MTdhZWMwYzZlYzg5YzA5Mzk2IiwiaWF0IjoxNzUyMjYxMDUzLCJuYmYiOjE3NTIyNjEwNTMsImV4cCI6MTc4Mzc5NzA1Mywic3ViIjoiODExNTU1Iiwic2NvcGVzIjpbXX0.IGzizj3D0uQnmcmWSneeoudsAD1vWYBHOHfc3h28Nu8CCug88jEK2mO2-MnBpyiCKD0Xa4x_hBfcskl3uQUlQBdGpcYzr0dVzoy-1WxNZ4sP01GGdrtuRSLqSGOsJWwxq8uaFoD7xpLrWKhSZQ2TWJvnHatuDXXIJH0RR6T9c3wvG32F7AA4nGtk8Y_TWYTvUtyd3aZuBlSrJoxZnJdOOyVfBiyTtqUVMdJU4gPWfuH2J6QIh0JPgseep40HRlCzieQCzW6xNIsJSHkJkiuHYMACnAB877M8XN6CcRk3PbOBcHLZkfpUngyYDA1Cg8QGbUBp80qLMmMvIKw-EJTuRzA7RI549ghbRwMP58GQKloLbJ4MzdVylFzvpLMB4Csw8u-hm9QyrYFJIyf3MHTzAT1HB8D5HWcUqgUTwXrPEj4cEW4PBsiRkn6g6OsSnploPq9G7Ih6nhsDXtGsJBxFPvmMBbzfqugKAmp4KtYY5k2jn9Na--1LGrpfkFAb8UBzLCxMV_8C0vVH8o0sh3AL1UmRlOhaHx-tj3jh66BiSBQl0j4W1ttv9dshckKPnaNUtEfEdXC1iat8gkyvTxYsTo6bYeR51GAUNLHFT7up5t7fPFk3cptt7xB0b_016G7YZC6xVJGjj2bE0TuBIh8WxGDCZtb4Q8b7Q-hkzEyIeiE"
-
-BRAIP_API_BASE_URL = "https://api.braip.com"
-
-def get_headers():
-    """Retorna os headers necessários para a API da Braip"""
-    return {
-        'Authorization': f'Bearer {BRAIP_API_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-
-def fazer_requisicao_api(endpoint, params=None):
-    """Faz uma requisição para a API da Braip"""
-    url = f"{BRAIP_API_BASE_URL}/{endpoint}"
-    headers = get_headers()
+def extract_braip_data(payload):
+    """
+    Extrai dados específicos da Braip baseado na estrutura dos webhooks
+    """
+    # Braip usa estrutura diferente dependendo do tipo de evento
+    transaction = payload.get('transaction', {})
+    product = payload.get('product', {})
+    customer = payload.get('customer', {})
+    affiliate = payload.get('affiliate', {})
     
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Erro na requisição à API Braip: {e}")
-        raise
-
-def mapear_dados_transacao(transacao):
-    """Mapeia dados da transação Braip para formato padrão"""
+    # Extrair valor monetário
+    amount = None
+    if 'value' in transaction:
+        # Valor pode vir em centavos ou reais
+        raw_value = transaction['value']
+        if isinstance(raw_value, str):
+            # Remove formatação monetária
+            clean_value = raw_value.replace('R$', '').replace(' ', '').replace(',', '.')
+            try:
+                amount = float(clean_value)
+            except ValueError:
+                amount = None
+        elif isinstance(raw_value, (int, float)):
+            # Se for número, pode estar em centavos (> 1000) ou reais
+            amount = raw_value / 100 if raw_value > 1000 else raw_value
+    
     return {
-        'webhook_id': transacao.get('id'),
-        'customer_email': transacao.get('customer', {}).get('email'),
-        'customer_name': transacao.get('customer', {}).get('name'),
-        'customer_document': transacao.get('customer', {}).get('document'),
-        'product_name': transacao.get('product', {}).get('name'),
-        'product_id': transacao.get('product', {}).get('id'),
-        'transaction_id': transacao.get('transaction_id'),
-        'amount': transacao.get('amount'),
-        'currency': transacao.get('currency', 'BRL'),
-        'payment_method': transacao.get('payment_method'),
-        'status': transacao.get('status'),
-        'commission_amount': transacao.get('commission_amount'),
-        'affiliate_email': transacao.get('affiliate', {}).get('email'),
-        'utm_source': transacao.get('utm_source'),
-        'utm_medium': transacao.get('utm_medium'),
-        'sales_link': transacao.get('sales_link'),
-        'raw_data': json.dumps(transacao, ensure_ascii=False, default=str)
+        # IDs e controle
+        'webhook_id': transaction.get('id') or payload.get('transaction_id'),
+        'transaction_id': transaction.get('id') or payload.get('transaction_id'),
+        'event_type': payload.get('event') or payload.get('type'),
+        
+        # Dados do cliente
+        'customer_email': customer.get('email') or payload.get('customer_email'),
+        'customer_name': customer.get('name') or payload.get('customer_name'),
+        'customer_document': customer.get('document') or customer.get('cpf'),
+        'customer_phone': customer.get('phone'),
+        
+        # Dados do produto
+        'product_name': product.get('name') or payload.get('product_name'),
+        'product_id': product.get('id') or payload.get('product_id'),
+        'product_ucode': product.get('ucode'),
+        
+        # Dados financeiros
+        'amount': amount,
+        'currency': payload.get('currency', 'BRL'),
+        'commission_amount': affiliate.get('commission_amount'),
+        
+        # Dados de pagamento
+        'payment_method': transaction.get('payment_method') or payload.get('payment_method'),
+        'status': transaction.get('status') or payload.get('status'),
+        'installments': transaction.get('installments'),
+        
+        # Dados do afiliado
+        'affiliate_email': affiliate.get('email'),
+        'affiliate_name': affiliate.get('name'),
+        'affiliate_code': affiliate.get('code'),
+        
+        # UTM e tracking
+        'utm_source': payload.get('utm_source'),
+        'utm_medium': payload.get('utm_medium'),
+        'utm_campaign': payload.get('utm_campaign'),
+        'sales_link': payload.get('sales_link'),
+        
+        # Datas
+        'created_at': transaction.get('created_at') or payload.get('created_at'),
+        'paid_at': transaction.get('paid_at'),
+        
+        # Dados específicos da Braip
+        'subscription_id': payload.get('subscription_id'),
+        'offer_code': payload.get('offer_code'),
+        'producer_name': payload.get('producer_name'),
+        'producer_document': payload.get('producer_document'),
+        
+        # Campos extras mantidos
+        'attendant_name': payload.get('attendant_name'),
+        'attendant_email': payload.get('attendant_email'),
     }
 
 @braip_bp.route("/", methods=["POST"])
 def receber_webhook():
-    """Endpoint original para receber webhooks da Braip"""
-    payload = request.json
+    """
+    Endpoint para receber webhooks da Braip
+    """
+    # Validar assinatura se configurada
     signature = request.headers.get('X-Braip-Signature')
-    
-    # Validação de assinatura
     secret = os.getenv("BRAIP_WEBHOOK_SECRET")
-    if secret:
+    
+    if secret and signature:
         expected_signature = hmac.new(
             secret.encode(),
             request.data,
@@ -73,176 +104,58 @@ def receber_webhook():
         ).hexdigest()
         
         if not hmac.compare_digest(signature, expected_signature):
-            abort(403, description="Assinatura inválida")
+            return jsonify({"error": "Assinatura inválida"}), 403
 
     try:
-        # Mapear dados da Braip para formato padrão
-        dados_padronizados = {
-            'webhook_id': payload.get('webhook_id'),
-            'customer_email': payload.get('customer_email'),
-            'customer_name': payload.get('customer_name'),
-            'customer_document': payload.get('customer_document'),
-            'product_name': payload.get('product_name'),
-            'product_id': payload.get('product_id'),
-            'transaction_id': payload.get('transaction_id'),
-            'amount': payload.get('amount'),
-            'currency': payload.get('currency', 'BRL'),
-            'payment_method': payload.get('payment_method'),
-            'status': payload.get('status'),
-            'commission_amount': payload.get('commission_amount'),
-            'affiliate_email': payload.get('affiliate_email'),
-            'utm_source': payload.get('utm_source'),
-            'utm_medium': payload.get('utm_medium'),
-            'sales_link': payload.get('sales_link'),
-            'raw_data': json.dumps(payload, ensure_ascii=False, default=str)
-        }
+        payload = request.get_json(force=True)
         
-        salvar_evento("braip", payload.get('event_type', 'webhook'), dados_padronizados)
-        return {"status": "ok"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}, 500
-
-@braip_bp.route("/sync", methods=["POST"])
-def sincronizar_transacoes():
-    """Sincroniza transações da API Braip"""
-    try:
-        # Parâmetros opcionais da requisição
-        data = request.get_json() or {}
+        # Debug: imprimir estrutura do payload
+        print(f"\n📥 Webhook Braip recebido:")
+        print(f"Event: {payload.get('event') or payload.get('type')}")
         
-        # Parâmetros para a API
-        params = {
-            'limit': data.get('limit', 100),  # Limite de resultados
-            'page': data.get('page', 1),      # Página
-        }
+        # Determinar tipo do evento
+        evento = payload.get('event') or payload.get('type') or 'webhook'
         
-        # Filtros opcionais
-        if data.get('start_date'):
-            params['start_date'] = data['start_date']
-        if data.get('end_date'):
-            params['end_date'] = data['end_date']
-        if data.get('status'):
-            params['status'] = data['status']
+        # Extrair e padronizar dados
+        dados_extraidos = extract_braip_data(payload)
         
-        # Buscar transações na API
-        response = fazer_requisicao_api('v1/transactions', params)
+        # Converter payload para JSON string
+        dados_extraidos['raw_data'] = json.dumps(payload, ensure_ascii=False, default=str)
         
-        transacoes_processadas = 0
-        erros = []
+        # Debug: verificar se algum campo ainda é dict
+        for key, value in dados_extraidos.items():
+            if isinstance(value, dict):
+                print(f"⚠️  Campo {key} ainda é dict: {value}")
+                dados_extraidos[key] = json.dumps(value)
         
-        # Processar cada transação
-        for transacao in response.get('data', []):
-            try:
-                dados_padronizados = mapear_dados_transacao(transacao)
-                salvar_evento("braip", "api_sync", dados_padronizados)
-                transacoes_processadas += 1
-            except Exception as e:
-                erros.append({
-                    'transaction_id': transacao.get('id'),
-                    'error': str(e)
-                })
+        # Salvar no banco
+        salvar_evento("braip", evento, dados_extraidos)
         
-        return {
+        print(f"✅ Evento Braip {evento} salvo com sucesso!")
+        
+        return jsonify({
             "status": "success",
-            "transacoes_processadas": transacoes_processadas,
-            "total_encontradas": len(response.get('data', [])),
-            "erros": erros,
-            "meta": response.get('meta', {})
-        }
+            "message": f"Evento {evento} processado com sucesso",
+            "transaction_id": dados_extraidos.get("transaction_id"),
+            "customer_name": dados_extraidos.get("customer_name")
+        }), 200
         
     except Exception as e:
-        return {
-            "status": "error", 
-            "message": str(e)
-        }, 500
+        print(f"❌ Erro no webhook Braip: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-@braip_bp.route("/sync/recent", methods=["POST"])
-def sincronizar_recentes():
-    """Sincroniza transações dos últimos 7 dias"""
-    try:
-        # Calcular data de 7 dias atrás
-        data_inicio = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-        data_fim = datetime.now().strftime('%Y-%m-%d')
-        
-        params = {
-            'start_date': data_inicio,
-            'end_date': data_fim,
-            'limit': 500
+@braip_bp.route("/test", methods=["GET"])
+def test_webhook():
+    """
+    Endpoint de teste para verificar se o webhook está funcionando
+    """
+    return jsonify({
+        "status": "ok",
+        "message": "Braip webhook is working",
+        "endpoint": "/webhook/braip",
+        "auth": {
+            "secret_configured": bool(os.getenv("BRAIP_WEBHOOK_SECRET"))
         }
-        
-        response = fazer_requisicao_api('v1/transactions', params)
-        
-        transacoes_processadas = 0
-        erros = []
-        
-        for transacao in response.get('data', []):
-            try:
-                dados_padronizados = mapear_dados_transacao(transacao)
-                salvar_evento("braip", "api_sync_recent", dados_padronizados)
-                transacoes_processadas += 1
-            except Exception as e:
-                erros.append({
-                    'transaction_id': transacao.get('id'),
-                    'error': str(e)
-                })
-        
-        return {
-            "status": "success",
-            "periodo": f"{data_inicio} até {data_fim}",
-            "transacoes_processadas": transacoes_processadas,
-            "total_encontradas": len(response.get('data', [])),
-            "erros": erros
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error", 
-            "message": str(e)
-        }, 500
-
-@braip_bp.route("/produtos", methods=["GET"])
-def listar_produtos():
-    """Lista produtos da conta Braip"""
-    try:
-        response = fazer_requisicao_api('v1/products')
-        return {
-            "status": "success",
-            "produtos": response.get('data', [])
-        }
-    except Exception as e:
-        return {
-            "status": "error", 
-            "message": str(e)
-        }, 500
-
-@braip_bp.route("/afiliados", methods=["GET"])
-def listar_afiliados():
-    """Lista afiliados da conta Braip"""
-    try:
-        response = fazer_requisicao_api('v1/affiliates')
-        return {
-            "status": "success",
-            "afiliados": response.get('data', [])
-        }
-    except Exception as e:
-        return {
-            "status": "error", 
-            "message": str(e)
-        }, 500
-
-@braip_bp.route("/status", methods=["GET"])
-def status_api():
-    """Verifica o status da conexão com a API Braip"""
-    try:
-        # Tenta fazer uma requisição simples para verificar conectividade
-        response = fazer_requisicao_api('v1/products', {'limit': 1})
-        return {
-            "status": "connected",
-            "api_status": "ok",
-            "message": "Conexão com API Braip funcionando"
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "api_status": "failed",
-            "message": str(e)
-        }, 500
+    })
