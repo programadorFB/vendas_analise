@@ -13,6 +13,51 @@ logger = logging.getLogger(__name__)
 
 export_bp = Blueprint("export", __name__)
 
+def get_safe_columns():
+    """
+    Verificar quais colunas existem na tabela webhooks e retornar apenas as seguras
+    """
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'webhooks'
+                ORDER BY ordinal_position
+            """)
+            existing_columns = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        # Colunas básicas que devem existir
+        basic_columns = [
+            'id', 'platform', 'event_type', 'webhook_id', 'transaction_id',
+            'customer_email', 'customer_name', 'customer_document',
+            'product_name', 'product_id', 'amount', 'currency', 
+            'payment_method', 'status', 'created_at'
+        ]
+        
+        # Colunas opcionais que podem existir
+        optional_columns = [
+            'customer_phone', 'offer_name', 'offer_id', 'commission_amount',
+            'affiliate_email', 'utm_source', 'utm_medium', 'utm_campaign', 
+            'utm_term', 'utm_content', 'sales_link', 'attendant_name', 
+            'attendant_email', 'paid_at', 'reason', 'refund_reason',
+            'base_amount', 'discount', 'payment_method_name', 'installments'
+        ]
+        
+        # Retornar apenas colunas que realmente existem
+        safe_columns = [col for col in basic_columns + optional_columns if col in existing_columns]
+        
+        logger.info(f"✅ Encontradas {len(safe_columns)} colunas seguras na tabela webhooks")
+        return safe_columns
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao verificar colunas: {e}")
+        # Fallback para colunas mínimas essenciais
+        return ['id', 'platform', 'event_type', 'customer_email', 'customer_name', 
+                'product_name', 'amount', 'status', 'created_at']
+
 def format_excel(writer, df, sheet_name):
     """
     Formatar planilha Excel com largura automática das colunas e estilos
@@ -292,17 +337,14 @@ def export_excel():
         
         logger.info(f"📊 Iniciando exportação Excel com filtros: platform={platform}, days={days}")
         
-        # Construir query SQL dinâmica
-        query = """
+        # Obter colunas seguras da tabela
+        safe_columns = get_safe_columns()
+        columns_str = ", ".join(safe_columns)
+        
+        # Construir query SQL dinâmica com colunas seguras
+        query = f"""
             SELECT 
-                id, platform, event_type, webhook_id, transaction_id,
-                customer_email, customer_name, customer_document, customer_phone,
-                product_name, product_id, offer_name, offer_id,
-                amount, currency, payment_method, status,
-                commission_amount, affiliate_email,
-                utm_source, utm_medium, utm_campaign, utm_term, utm_content,
-                sales_link, attendant_name, attendant_email,
-                created_at, paid_at, reason, refund_reason
+                {columns_str}
             FROM webhooks 
             WHERE 1=1
         """
@@ -344,7 +386,7 @@ def export_excel():
         with conn.cursor() as cursor:
             cursor.execute(query, params)
             data = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
+            columns = safe_columns  # Usar as colunas seguras
         conn.close()
         
         if not data:
@@ -416,17 +458,39 @@ def scheduled_export():
         
         logger.info(f"⏰ Exportação agendada iniciada: platform={platform}, days={days}")
         
-        query = """
+        # Query para dados recentes com colunas seguras
+        # Verificar colunas existentes primeiro
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'webhooks'
+            """)
+            existing_columns = [row[0] for row in cursor.fetchall()]
+        
+        # Colunas básicas para exportação agendada
+        scheduled_columns = [
+            'id', 'platform', 'event_type', 'webhook_id', 'transaction_id',
+            'customer_email', 'customer_name', 'customer_document',
+            'product_name', 'product_id', 'amount', 'currency', 
+            'payment_method', 'status', 'commission_amount', 
+            'affiliate_email', 'created_at'
+        ]
+        
+        # Adicionar colunas opcionais se existirem
+        optional_scheduled = ['utm_source', 'utm_medium', 'customer_phone']
+        scheduled_columns.extend([col for col in optional_scheduled if col in existing_columns])
+        
+        columns_str = ", ".join(scheduled_columns)
+        
+        query = f"""
             SELECT 
-                id, platform, event_type, webhook_id, transaction_id,
-                customer_email, customer_name, customer_document,
-                product_name, product_id, amount, currency, 
-                payment_method, status, commission_amount,
-                affiliate_email, created_at
+                {columns_str}
             FROM webhooks 
-            WHERE created_at >= NOW() - INTERVAL '%s days'  -- String literal com placeholder
+            WHERE created_at >= NOW() - INTERVAL %s DAY
         """
-        params = [str(days)]  
+        params = [f'{days}']
         
         if platform:
             query += " AND platform = %s"
@@ -440,11 +504,10 @@ def scheduled_export():
         query += " ORDER BY created_at DESC"
         
         # Executar query
-        conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute(query, params)
             webhook_data = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
+            columns = scheduled_columns
         conn.close()
         
         if not webhook_data:
@@ -790,10 +853,27 @@ def quick_export():
         
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            query = """
+            # Verificar colunas existentes
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'webhooks'
+            """)
+            existing_columns = [row[0] for row in cursor.fetchall()]
+            
+            # Query para dados recentes básicos
+            basic_columns = ['platform', 'event_type', 'customer_email', 'customer_name',
+                           'product_name', 'amount', 'status', 'created_at']
+            
+            # Adicionar customer_phone se existir
+            if 'customer_phone' in existing_columns:
+                basic_columns.insert(4, 'customer_phone')
+            
+            columns_str = ", ".join(basic_columns)
+            
+            query = f"""
                 SELECT 
-                    platform, event_type, customer_email, customer_name,
-                    product_name, amount, status, created_at
+                    {columns_str}
                 FROM webhooks 
                 WHERE created_at >= NOW() - INTERVAL %s HOUR
             """
@@ -807,7 +887,7 @@ def quick_export():
             
             cursor.execute(query, params)
             data = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
+            columns = basic_columns
         conn.close()
         
         if not data:
