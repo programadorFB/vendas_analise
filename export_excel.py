@@ -335,7 +335,7 @@ def export_excel():
             params.extend([start_date, end_date])
         elif days:
             query += " AND created_at >= NOW() - INTERVAL %s DAY"
-            params.append(days)
+            params.append(f'{days}')
         
         query += " ORDER BY created_at DESC"
         
@@ -416,17 +416,17 @@ def scheduled_export():
         
         logger.info(f"⏰ Exportação agendada iniciada: platform={platform}, days={days}")
         
-        # Query para dados recentes
         query = """
             SELECT 
                 id, platform, event_type, webhook_id, transaction_id,
                 customer_email, customer_name, customer_document,
-                product_name, product_id, amount, currency, payment_method, status,
-                commission_amount, affiliate_email, created_at, utm_source, utm_medium
+                product_name, product_id, amount, currency, 
+                payment_method, status, commission_amount,
+                affiliate_email, created_at
             FROM webhooks 
-            WHERE created_at >= NOW() - INTERVAL %s DAY
+            WHERE created_at >= NOW() - INTERVAL '%s days'  -- String literal com placeholder
         """
-        params = [days]
+        params = [str(days)]  
         
         if platform:
             query += " AND platform = %s"
@@ -546,7 +546,7 @@ def export_stats():
                 WHERE created_at >= NOW() - INTERVAL %s DAY
                 GROUP BY platform
                 ORDER BY total_revenue DESC
-            """, [days])
+            """, [f'{days}'])
             
             platform_stats = cursor.fetchall()
             platform_columns = [desc[0] for desc in cursor.description]
@@ -568,7 +568,7 @@ def export_stats():
                 GROUP BY platform, product_name
                 ORDER BY total_revenue DESC
                 LIMIT 100
-            """, [days])
+            """, [f'{days}'])
             
             products_data = cursor.fetchall()
             products_columns = [desc[0] for desc in cursor.description]
@@ -588,7 +588,7 @@ def export_stats():
                     AND payment_method != ''
                 GROUP BY platform, payment_method
                 ORDER BY total_revenue DESC
-            """, [days])
+            """, [f'{days}'])
             
             payment_stats = cursor.fetchall()
             payment_columns = [desc[0] for desc in cursor.description]
@@ -607,7 +607,7 @@ def export_stats():
                     WHERE created_at >= NOW() - INTERVAL %s DAY
                     GROUP BY DATE(created_at), platform
                     ORDER BY date DESC, platform
-                """, [min(days, 90)])
+                """, [f'{min(days, 90)}'])
                 
                 timeline_data = cursor.fetchall()
                 timeline_columns = [desc[0] for desc in cursor.description]
@@ -629,7 +629,7 @@ def export_stats():
                 GROUP BY platform, affiliate_email
                 ORDER BY total_commission DESC
                 LIMIT 50
-            """, [days])
+            """, [f'{days}'])
             
             affiliate_data = cursor.fetchall()
             if affiliate_data:
@@ -797,7 +797,7 @@ def quick_export():
                 FROM webhooks 
                 WHERE created_at >= NOW() - INTERVAL %s HOUR
             """
-            params = [hours]
+            params = [f'{hours}']
             
             if platform:
                 query += " AND platform = %s"
@@ -1015,7 +1015,7 @@ def export_analytics():
         query = analytics_queries.get(groupby, analytics_queries['platform'])
         
         with conn.cursor() as cursor:
-            cursor.execute(query, [days])
+            cursor.execute(query, [f'{days}'])
             analytics_data = cursor.fetchall()
             columns = [desc[0] for desc in cursor.description]
         conn.close()
