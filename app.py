@@ -501,9 +501,10 @@ def quick_excel_export():
                 payment_method, status, commission_amount,
                 affiliate_email, created_at
             FROM webhooks 
-            WHERE created_at >= NOW() - INTERVAL %s DAY
+            WHERE created_at >= NOW() - INTERVAL %s
         """
-        params = [days]
+        params = [f"{days} days"]
+
         
         if platform:
             query += " AND platform = %s"
