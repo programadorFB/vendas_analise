@@ -58,6 +58,92 @@ def get_safe_columns():
         return ['id', 'platform', 'event_type', 'customer_email', 'customer_name', 
                 'product_name', 'amount', 'status', 'created_at']
 
+def fix_timezone_columns(df):
+    """
+    Versão simples e robusta para corrigir problemas de timezone com Excel
+    """
+    logger.info("🕐 Iniciando correção de timezone para Excel...")
+    
+    try:
+        # Identificar colunas de data
+        date_columns = []
+        for col in df.columns:
+            # Verificar se é coluna de data pelo nome
+            if any(keyword in col.lower() for keyword in ['date', 'created_at', 'paid_at', 'time', 'expires_at', 'data']):
+                date_columns.append(col)
+            # Verificar se é coluna de data pelo tipo
+            elif str(df[col].dtype).startswith('datetime64'):
+                date_columns.append(col)
+        
+        logger.info(f"📅 Encontradas {len(date_columns)} colunas de data: {date_columns}")
+        
+        # Corrigir cada coluna de data
+        for col in date_columns:
+            try:
+                original_dtype = str(df[col].dtype)
+                logger.info(f"🔧 Processando coluna: {col} (tipo: {original_dtype})")
+                
+                # Se já é datetime com timezone, remover
+                if 'datetime64' in original_dtype and ('tz' in original_dtype or 'UTC' in original_dtype):
+                    logger.info(f"   📍 Removendo timezone de {col}")
+                    df[col] = df[col].dt.tz_localize(None)
+                    continue
+                
+                # Se é string, limpar e converter
+                if df[col].dtype == 'object':
+                    logger.info(f"   🔄 Convertendo string para datetime: {col}")
+                    
+                    # Converter para string e limpar timezone
+                    df[col] = df[col].astype(str)
+                    
+                    # Remover indicadores de timezone
+                    timezone_patterns = ['+00:00', 'UTC', 'Z', '+0000', ' UTC', 'T00:00:00Z']
+                    for pattern in timezone_patterns:
+                        df[col] = df[col].str.replace(pattern, '', regex=False)
+                    
+                    # Converter para datetime sem timezone
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                
+                logger.info(f"   ✅ {col} processado: {str(df[col].dtype)}")
+                
+            except Exception as col_error:
+                logger.warning(f"   ⚠️ Erro ao processar {col}: {col_error}")
+                # Fallback: manter como string
+                try:
+                    df[col] = df[col].astype(str)
+                    logger.info(f"   📝 {col} convertido para string")
+                except:
+                    logger.error(f"   ❌ Falha total na coluna {col}")
+        
+        # Verificação final: garantir que não há timezone
+        for col in df.columns:
+            if str(df[col].dtype).startswith('datetime64'):
+                if 'tz' in str(df[col].dtype) or 'UTC' in str(df[col].dtype):
+                    logger.warning(f"🚨 Conversão final forçada para {col}")
+                    try:
+                        # Última tentativa: converter para string formatada e depois datetime
+                        df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                    except:
+                        df[col] = df[col].astype(str)
+        
+        logger.info("✅ Correção de timezone concluída")
+        return df
+        
+    except Exception as e:
+        logger.error(f"❌ Erro crítico na correção de timezone: {e}")
+        
+        # Fallback de emergência: converter problemáticas para string
+        for col in df.columns:
+            if str(df[col].dtype).startswith('datetime64'):
+                try:
+                    df[col] = df[col].astype(str)
+                    logger.warning(f"🆘 {col} convertido para string (emergência)")
+                except:
+                    pass
+        
+        return df
+
 def format_excel(writer, df, sheet_name):
     """
     Formatar planilha Excel com largura automática das colunas e estilos
@@ -192,11 +278,30 @@ def prepare_dataframe(data, columns):
         existing_columns = {col: column_mapping.get(col, col) for col in df.columns if col in column_mapping}
         df = df.rename(columns=existing_columns)
         
-        # Converter datas para formato adequado
+        # Converter datas para formato adequado (remover timezone)
         date_columns = ['Data de Criação', 'Data de Pagamento', 'created_at', 'paid_at']
         for date_col in date_columns:
             if date_col in df.columns:
-                df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                try:
+                    # Converter para datetime
+                    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+                    
+                    # Verificar e remover timezone se presente
+                    if hasattr(df[date_col].dtype, 'tz') and df[date_col].dtype.tz is not None:
+                        logger.info(f"🕐 Removendo timezone da coluna: {date_col}")
+                        df[date_col] = df[date_col].dt.tz_localize(None)
+                    elif 'UTC' in str(df[date_col].dtype) or '+00:00' in str(df[date_col].dtype):
+                        logger.info(f"🕐 Convertendo timezone na coluna: {date_col}")
+                        df[date_col] = df[date_col].dt.tz_localize(None)
+                        
+                except Exception as date_error:
+                    logger.warning(f"⚠️ Problema ao converter data na coluna {date_col}: {date_error}")
+                    # Tentar conversão alternativa
+                    try:
+                        df[date_col] = pd.to_datetime(df[date_col].astype(str).str.replace(r'\+00:00|UTC', '', regex=True), errors='coerce')
+                    except:
+                        logger.warning(f"⚠️ Mantendo coluna {date_col} como texto")
+                        df[date_col] = df[date_col].astype(str)
         
         # Converter valores monetários
         money_columns = ['Valor', 'Comissão', 'amount', 'commission_amount']
@@ -239,6 +344,9 @@ def create_excel_report(data, columns, filename="relatorio_webhooks.xlsx", uploa
             logger.warning("⚠️ Nenhum dado para gerar relatório")
             # Criar Excel vazio com cabeçalhos
             df = pd.DataFrame(columns=[columns[0]] if columns else ['Sem Dados'])
+        
+        # IMPORTANTE: Corrigir problemas de timezone antes de criar Excel
+        df = fix_timezone_columns(df)
         
         # Criar buffer em memória para o arquivo Excel
         excel_buffer = BytesIO()
@@ -458,29 +566,17 @@ def scheduled_export():
         
         logger.info(f"⏰ Exportação agendada iniciada: platform={platform}, days={days}")
         
-        # Query para dados recentes com colunas seguras
-        # Verificar colunas existentes primeiro
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            cursor.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'webhooks'
-            """)
-            existing_columns = [row[0] for row in cursor.fetchall()]
+        # Obter colunas seguras
+        safe_columns = get_safe_columns()
         
         # Colunas básicas para exportação agendada
-        scheduled_columns = [
+        scheduled_columns = [col for col in [
             'id', 'platform', 'event_type', 'webhook_id', 'transaction_id',
             'customer_email', 'customer_name', 'customer_document',
             'product_name', 'product_id', 'amount', 'currency', 
             'payment_method', 'status', 'commission_amount', 
-            'affiliate_email', 'created_at'
-        ]
-        
-        # Adicionar colunas opcionais se existirem
-        optional_scheduled = ['utm_source', 'utm_medium', 'customer_phone']
-        scheduled_columns.extend([col for col in optional_scheduled if col in existing_columns])
+            'affiliate_email', 'created_at', 'utm_source', 'utm_medium'
+        ] if col in safe_columns]
         
         columns_str = ", ".join(scheduled_columns)
         
@@ -504,6 +600,7 @@ def scheduled_export():
         query += " ORDER BY created_at DESC"
         
         # Executar query
+        conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute(query, params)
             webhook_data = cursor.fetchall()
@@ -582,7 +679,6 @@ def export_stats():
     try:
         days = request.args.get('days', 30, type=int)
         upload_drive = request.args.get('upload_drive', 'true').lower() == 'true'
-        include_details = request.args.get('include_details', 'true').lower() == 'true'
         
         logger.info(f"📈 Iniciando exportação de estatísticas para {days} dias")
         
@@ -711,6 +807,7 @@ def export_stats():
             for sheet_name, (data, columns) in excel_data.items():
                 if data:  # Só criar aba se houver dados
                     df = prepare_dataframe(data, columns)
+                    df = fix_timezone_columns(df)  # Corrigir timezone
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
                     format_excel(writer, df, sheet_name)
                     
@@ -759,37 +856,39 @@ def create_backup():
     try:
         data = request.get_json() or {}
         include_raw_data = data.get('include_raw_data', False)
-        compress_old_data = data.get('compress_old_data', True)
         
         logger.info("🔄 Iniciando backup completo dos webhooks")
+        
+        # Obter colunas seguras
+        safe_columns = get_safe_columns()
+        
+        # Se incluir raw_data, adicionar à lista se existir
+        if include_raw_data and 'raw_data' not in safe_columns:
+            # Verificar se raw_data existe na tabela
+            conn = get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'webhooks' AND column_name = 'raw_data'
+                """)
+                if cursor.fetchone():
+                    safe_columns.append('raw_data')
+            conn.close()
+        
+        columns_str = ", ".join(safe_columns)
         
         # Backup apenas para Drive, sem download
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # Query para backup completo
-            if include_raw_data:
-                cursor.execute("""
-                    SELECT * FROM webhooks 
-                    ORDER BY created_at DESC
-                """)
-            else:
-                # Excluir raw_data para economizar espaço
-                cursor.execute("""
-                    SELECT 
-                        id, platform, event_type, webhook_id, transaction_id,
-                        customer_email, customer_name, customer_document, customer_phone,
-                        product_name, product_id, offer_name, offer_id,
-                        amount, currency, payment_method, status,
-                        commission_amount, affiliate_email,
-                        utm_source, utm_medium, utm_campaign,
-                        sales_link, attendant_name, attendant_email,
-                        created_at, paid_at
-                    FROM webhooks 
-                    ORDER BY created_at DESC
-                """)
-            
+            query = f"""
+                SELECT {columns_str}
+                FROM webhooks 
+                ORDER BY created_at DESC
+            """
+            cursor.execute(query)
             all_data = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
+            columns = safe_columns
         conn.close()
         
         if not all_data:
@@ -851,26 +950,19 @@ def quick_export():
         
         logger.info(f"⚡ Exportação rápida: platform={platform}, hours={hours}")
         
+        # Obter colunas seguras
+        safe_columns = get_safe_columns()
+        
+        # Colunas básicas para exportação rápida
+        basic_columns = [col for col in [
+            'platform', 'event_type', 'customer_email', 'customer_name',
+            'product_name', 'amount', 'status', 'created_at'
+        ] if col in safe_columns]
+        
+        columns_str = ", ".join(basic_columns)
+        
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # Verificar colunas existentes
-            cursor.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'webhooks'
-            """)
-            existing_columns = [row[0] for row in cursor.fetchall()]
-            
-            # Query para dados recentes básicos
-            basic_columns = ['platform', 'event_type', 'customer_email', 'customer_name',
-                           'product_name', 'amount', 'status', 'created_at']
-            
-            # Adicionar customer_phone se existir
-            if 'customer_phone' in existing_columns:
-                basic_columns.insert(4, 'customer_phone')
-            
-            columns_str = ", ".join(basic_columns)
-            
             query = f"""
                 SELECT 
                     {columns_str}
@@ -915,217 +1007,6 @@ def quick_export():
         logger.error(f"❌ Erro na exportação rápida: {e}")
         return jsonify({"error": str(e)}), 500
 
-@export_bp.route("/custom", methods=["POST"])
-def custom_export():
-    """
-    Exportação customizada com query SQL personalizada (uso avançado)
-    """
-    try:
-        data = request.get_json()
-        
-        if not data or 'query' not in data:
-            return jsonify({"error": "Query SQL é obrigatória"}), 400
-        
-        custom_query = data['query']
-        export_name = data.get('export_name', 'custom_export')
-        upload_to_drive = data.get('upload_to_drive', True)
-        
-        # Validação básica de segurança
-        forbidden_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
-        query_upper = custom_query.upper()
-        
-        for keyword in forbidden_keywords:
-            if keyword in query_upper:
-                return jsonify({
-                    "error": f"Operação não permitida: {keyword}",
-                    "message": "Apenas consultas SELECT são permitidas"
-                }), 403
-        
-        if not query_upper.strip().startswith('SELECT'):
-            return jsonify({
-                "error": "Apenas consultas SELECT são permitidas"
-            }), 403
-        
-        logger.info(f"🔧 Exportação customizada: {export_name}")
-        
-        # Executar query customizada
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            cursor.execute(custom_query)
-            custom_data = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
-        conn.close()
-        
-        if not custom_data:
-            return jsonify({
-                "error": "Query não retornou dados",
-                "query": custom_query
-            }), 404
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"webhooks_{export_name}_{timestamp}.xlsx"
-        
-        excel_buffer = create_excel_report(
-            data=custom_data,
-            columns=columns,
-            filename=filename,
-            upload_to_drive=upload_to_drive
-        )
-        
-        logger.info(f"✅ Exportação customizada concluída: {len(custom_data)} registros")
-        
-        return send_file(
-            excel_buffer,
-            as_attachment=True,
-            download_name=filename,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Erro na exportação customizada: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@export_bp.route("/template", methods=["GET"])
-def download_template():
-    """
-    Baixar template Excel para importação de dados
-    """
-    try:
-        logger.info("📄 Gerando template Excel")
-        
-        # Definir estrutura do template
-        template_columns = [
-            'platform', 'event_type', 'customer_email', 'customer_name',
-            'product_name', 'amount', 'currency', 'payment_method', 'status'
-        ]
-        
-        # Criar exemplo com dados fictícios
-        example_data = [
-            ['kirvano', 'purchase', 'cliente@email.com', 'João Silva', 
-             'Produto Exemplo', 99.90, 'BRL', 'credit_card', 'paid'],
-            ['hubla', 'subscription', 'maria@email.com', 'Maria Santos', 
-             'Curso Online', 197.00, 'BRL', 'boleto', 'pending']
-        ]
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"webhooks_template_{timestamp}.xlsx"
-        
-        excel_buffer = create_excel_report(
-            data=example_data,
-            columns=template_columns,
-            filename=filename,
-            upload_to_drive=False  # Template não precisa ir para Drive
-        )
-        
-        return send_file(
-            excel_buffer,
-            as_attachment=True,
-            download_name=filename,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Erro ao gerar template: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@export_bp.route("/analytics", methods=["GET"])
-def export_analytics():
-    """
-    Exportar dados para análise com métricas calculadas
-    """
-    try:
-        days = request.args.get('days', 30, type=int)
-        groupby = request.args.get('groupby', 'platform')  # platform, product, day, month
-        
-        logger.info(f"📊 Exportação para analytics: groupby={groupby}, days={days}")
-        
-        conn = get_db_connection()
-        
-        # Queries para diferentes tipos de agrupamento
-        analytics_queries = {
-            'platform': """
-                SELECT 
-                    platform,
-                    DATE_TRUNC('day', created_at) as date,
-                    COUNT(*) as events,
-                    COUNT(DISTINCT customer_email) as unique_customers,
-                    SUM(CASE WHEN amount IS NOT NULL THEN amount ELSE 0 END) as revenue,
-                    AVG(CASE WHEN amount IS NOT NULL THEN amount ELSE NULL END) as avg_ticket,
-                    COUNT(CASE WHEN status ILIKE '%paid%' OR status ILIKE '%completed%' THEN 1 END) as conversions,
-                    ROUND(
-                        COUNT(CASE WHEN status ILIKE '%paid%' OR status ILIKE '%completed%' THEN 1 END)::decimal / 
-                        NULLIF(COUNT(*), 0) * 100, 2
-                    ) as conversion_rate
-                FROM webhooks 
-                WHERE created_at >= NOW() - INTERVAL %s DAY
-                GROUP BY platform, DATE_TRUNC('day', created_at)
-                ORDER BY date DESC, platform
-            """,
-            'product': """
-                SELECT 
-                    platform,
-                    product_name,
-                    COUNT(*) as sales,
-                    COUNT(DISTINCT customer_email) as unique_buyers,
-                    SUM(CASE WHEN amount IS NOT NULL THEN amount ELSE 0 END) as total_revenue,
-                    AVG(CASE WHEN amount IS NOT NULL THEN amount ELSE NULL END) as avg_price,
-                    MIN(created_at) as first_sale,
-                    MAX(created_at) as last_sale
-                FROM webhooks 
-                WHERE created_at >= NOW() - INTERVAL %s DAY
-                    AND product_name IS NOT NULL AND product_name != ''
-                GROUP BY platform, product_name
-                ORDER BY total_revenue DESC
-            """,
-            'monthly': """
-                SELECT 
-                    DATE_TRUNC('month', created_at) as month,
-                    platform,
-                    COUNT(*) as events,
-                    COUNT(DISTINCT customer_email) as unique_customers,
-                    SUM(CASE WHEN amount IS NOT NULL THEN amount ELSE 0 END) as revenue,
-                    COUNT(CASE WHEN status ILIKE '%paid%' OR status ILIKE '%completed%' THEN 1 END) as conversions
-                FROM webhooks 
-                WHERE created_at >= NOW() - INTERVAL %s DAY
-                GROUP BY DATE_TRUNC('month', created_at), platform
-                ORDER BY month DESC, platform
-            """
-        }
-        
-        query = analytics_queries.get(groupby, analytics_queries['platform'])
-        
-        with conn.cursor() as cursor:
-            cursor.execute(query, [f'{days}'])
-            analytics_data = cursor.fetchall()
-            columns = [desc[0] for desc in cursor.description]
-        conn.close()
-        
-        if not analytics_data:
-            return jsonify({"error": "Nenhum dado para análise encontrado"}), 404
-        
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"webhooks_analytics_{groupby}_{days}days_{timestamp}.xlsx"
-        
-        excel_buffer = create_excel_report(
-            data=analytics_data,
-            columns=columns,
-            filename=filename,
-            upload_to_drive=True
-        )
-        
-        logger.info(f"✅ Exportação analytics concluída: {len(analytics_data)} registros")
-        
-        return send_file(
-            excel_buffer,
-            as_attachment=True,
-            download_name=filename,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Erro na exportação analytics: {e}")
-        return jsonify({"error": str(e)}), 500
-
 @export_bp.route("/status", methods=["GET"])
 def export_status():
     """
@@ -1137,6 +1018,9 @@ def export_status():
         
         recent_files = list_webhook_files(limit=10, folder_name="Webhooks_Reports")
         drive_usage = get_drive_usage()
+        
+        # Verificar colunas disponíveis
+        safe_columns = get_safe_columns()
         
         # Estatísticas do banco
         conn = get_db_connection()
@@ -1159,7 +1043,9 @@ def export_status():
                 "total_webhooks": db_stats[0],
                 "platforms": db_stats[1],
                 "oldest_record": db_stats[2].isoformat() if db_stats[2] else None,
-                "newest_record": db_stats[3].isoformat() if db_stats[3] else None
+                "newest_record": db_stats[3].isoformat() if db_stats[3] else None,
+                "available_columns": len(safe_columns),
+                "columns": safe_columns
             },
             "google_drive": {
                 "connected": bool(drive_usage and not drive_usage.get("error")),
@@ -1180,9 +1066,7 @@ def export_status():
                 "scheduled": "/export/excel/scheduled - Exportação agendada",
                 "backup": "/export/backup - Backup completo",
                 "quick": "/export/quick - Exportação rápida",
-                "analytics": "/export/analytics - Dados para análise",
-                "custom": "/export/custom - Query personalizada",
-                "template": "/export/template - Template para importação"
+                "status": "/export/status - Status do serviço"
             }
         })
         
