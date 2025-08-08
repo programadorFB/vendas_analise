@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics Dashboard Pro</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-content">
+            <div class="logo"><i class="fas fa-chart-line"></i> Analytics Pro</div>
+            <div class="nav-actions">
+                <button id="exportPdfButton" class="btn btn-secondary"><i class="fas fa-file-pdf"></i> Exportar PDF</button>
+                <button id="exportDriveButton" class="btn btn-success"><i class="fab fa-google-drive"></i> Salvar no Drive</button>
+                <button id="refreshButton" class="btn btn-primary"><i class="fas fa-sync"></i> Atualizar</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="filters-section">
+            <div class="filters-grid">
+                <div class="form-group"><label>Data Inicial</label><input type="date" id="start_date" class="form-control"></div>
+                <div class="form-group"><label>Data Final</label><input type="date" id="end_date" class="form-control"></div>
+                <div class="form-group"><label>Top N Produtos</label><select id="top_n" class="form-control"><option value="5">Top 5</option><option value="10">Top 10</option><option value="15">Top 15</option></select></div>
+                <div class="form-group"><label>Plataforma</label><select id="platform_filter" class="form-control"><option value="">Todas</option><option value="kirvano">Kirvano</option><option value="hubla">Hubla</option><option value="braip">Braip</option><option value="cakto">Cakto</option></select></div>
+                <div class="form-group"><button id="applyFilters" class="btn btn-primary"><i class="fas fa-filter"></i> Aplicar</button></div>
+            </div>
+        </div>
+
+        <div class="kpis-grid">
+            <div class="kpi-card">
+                <div class="kpi-header"><span class="kpi-title">Valor em Vendas (Período)</span><div class="kpi-icon sales"><i class="fas fa-dollar-sign"></i></div></div>
+                <div class="kpi-value" id="kpi-sales-value">--</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-header"><span class="kpi-title">Valor Perdido (Abandonos)</span><div class="kpi-icon abandoned"><i class="fas fa-shopping-cart"></i></div></div>
+                <div class="kpi-value" id="kpi-abandoned-value">--</div>
+            </div>
+            <div class="kpi-card">
+                <!-- ==================== ALTERAÇÃO 1: ÍCONE CORRIGIDO ==================== -->
+                <div class="kpi-header"><span class="kpi-title">Valor Reembolsado</span><div class="kpi-icon refunds"><i class="fas fa-undo"></i></div></div>
+                <div class="kpi-value" id="kpi-refunds-value">--</div>
+            </div>
+             <div class="kpi-card">
+                <!-- ==================== ALTERAÇÃO 2: ÍCONE CORRIGIDO ==================== -->
+                <div class="kpi-header"><span class="kpi-title">Total de Vendas (Qtd)</span><div class="kpi-icon conversion"><i class="fas fa-check-circle"></i></div></div>
+                <div class="kpi-value" id="kpi-sales-count">--</div>
+            </div>
+        </div>
+
+        <div class="charts-grid">
+            <div class="chart-card"><div class="chart-header"><h3 class="chart-title">Tendência de Lucro Diário</h3></div><div class="chart-container"><canvas id="dailyTrendChart"></canvas></div></div>
+            <div class="chart-card"><div class="chart-header"><h3 class="chart-title">Participação por Plataforma</h3></div><div class="chart-container"><canvas id="platformRevenueChart"></canvas></div></div>
+        </div>
+        
+        <div class="analytics-grid">
+            <div class="table-container"><h3><i class="fas fa-table"></i> Análise por Plataforma</h3><div class="table-responsive"><table class="modern-table"><thead><tr><th>Plataforma</th><th>Vendas</th><th>Lucro</th><th>Ticket Médio</th><th>Abandonos</th></tr></thead><tbody id="platform-table-body"></tbody></table></div></div>
+            <div class="chart-card"><div class="chart-header"><h3 class="chart-title">Produtos Mais Vendidos</h3></div><div class="chart-container"><canvas id="topSellingChart"></canvas></div></div>
+            <div class="chart-card"><div class="chart-header"><h3 class="chart-title">Análise de Abandono</h3></div><div class="chart-container"><canvas id="topAbandonedChart"></canvas></div></div>
+            <div class="chart-card"><div class="chart-header"><h3 class="chart-title">Contagem de Reembolsos</h3></div><div class="chart-container"><canvas id="refundsChart"></canvas></div></div>
+        </div>
+    </div>
+
+    <!-- ==================== ALTERAÇÃO 3: LOADING COM TEXTO ==================== -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>Carregando...</p>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
